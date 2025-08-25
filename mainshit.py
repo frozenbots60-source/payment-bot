@@ -19,7 +19,7 @@ OXAPAY_API_BASE = "https://api.oxapay.com"
 
 # Pricing plans
 PLANS = {
-    "1d": {"label": "1 Day", "amount": 5.0, "hours": 24},
+    "1d": {"label": "1 Day", "amount": 0.1, "hours": 24},
     "7d": {"label": "7 Days", "amount": 20.0, "hours": 168}
 }
 
