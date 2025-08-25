@@ -29,7 +29,7 @@ POLL_INTERVAL = 10  # 10 seconds
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("oxapay_bot")
 
-bot = TelegramClient("oxapay_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+bot = TelegramClient("oxa1pay_bot_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 # Store user data: {user_id: {"username": stake_username, "track_id": str, "plan": str}}
 user_sessions = {}
