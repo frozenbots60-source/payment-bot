@@ -11,7 +11,7 @@ BOT_TOKEN = "8296029448:AAGBEIsUyFerlpkyM-G0XjnYfkJw4jd8gko"
 SUPPORT_HANDLE = "kustbotssupport"
 ANNOUNCE_CHANNEL = "KustBotsNetwork"
 FORWARD_CHANNEL = "kustbotsnetwork"  # channel to forward from
-FORWARD_MESSAGE_ID = 131             # message to forward
+FORWARD_MESSAGE_ID = 132             # message to forward
 
 # OxaPay API key
 OXAPAY_API_KEY = "OJ1TOG-JGVUPW-OVJEFS-NERB6W"
