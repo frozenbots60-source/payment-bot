@@ -14,7 +14,7 @@ FORWARD_CHANNEL = "kustbotsnetwork"  # channel to forward from
 FORWARD_MESSAGE_ID = 131             # message to forward
 
 # OxaPay API key
-OXAPAY_API_KEY = "I2VVQJ-B7LTRZ-YGRBFY-6ST5QD"
+OXAPAY_API_KEY = "OJ1TOG-JGVUPW-OVJEFS-NERB6W"
 OXAPAY_API_BASE = "https://api.oxapay.com"
 
 # Pricing plans
