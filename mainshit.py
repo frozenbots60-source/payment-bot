@@ -37,9 +37,6 @@ user_sessions = {}
 # Store active payment tasks per user
 user_tasks = {}
 
-# Live-looking trusted users counter (starts at 200)
-trusted_users_count = 200
-
 
 def create_invoice(amount: float, currency="USDT", lifetime=60):
     url = f"{OXAPAY_API_BASE}/v1/payment/invoice"
@@ -106,21 +103,12 @@ async def wait_for_payment(user_id: int, track_id: str, label: str, hours: int):
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_handler(event):
-    global trusted_users_count
-
-    # increment the live-looking trusted users counter for each /start
-    try:
-        trusted_users_count += 1
-    except Exception:
-        # fallback: if something goes wrong, keep going without crashing
-        pass
-
     # Prepare caption and buttons for the image welcome message (HTML formatting)
     caption = (
         "<b>🚀 KustX — Fastest Stake Auto Code Claimer</b>\n\n"
         "Welcome! I'm the fastest Stake auto code claimer — <b>KustX</b>.\n\n"
         "🔒 <b>Important:</b> Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
-        f"✅ <b>Trusted by {trusted_users_count} users</b>\n\n"
+        "✅ <b>Trusted by over 100 users worldwide</b>\n\n"
         "Tap <b>Buy</b> to start the purchase process, or use <b>Support</b>/<b>Updates</b> below."
     )
     buttons = [
@@ -138,7 +126,7 @@ async def start_handler(event):
             "<b>🚀 KustX — Fastest Stake Auto Code Claimer</b>\n\n"
             "Welcome! I'm the fastest Stake auto code claimer — <b>KustX</b>.\n\n"
             "🔒 <b>Important:</b> Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
-            f"✅ <b>Trusted by {trusted_users_count} users</b>\n\n"
+            "✅ <b>Trusted by over 100 users worldwide</b>\n\n"
             "Tap <b>Buy</b> to start the purchase process, or use <b>Support</b>/<b>Updates</b> below.",
             parse_mode="html"
         )
@@ -275,4 +263,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
