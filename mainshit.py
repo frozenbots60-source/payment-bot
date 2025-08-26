@@ -103,10 +103,30 @@ async def wait_for_payment(user_id: int, track_id: str, label: str, hours: int):
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_handler(event):
-    await event.respond(
-        "Welcome! Please send me your Stake username.\n\n"
-        "**Important:** Premium will be activated on this username. Don't misspell it!"
+    # Prepare caption and buttons for the image welcome message
+    caption = (
+        "🚀 *KustX — Fastest Stake Auto Code Claimer*\n\n"
+        "Welcome! I'm the fastest Stake auto code claimer — *KustX*.\n\n"
+        "🔒 *Important:* Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
+        "Tap *Buy* to start the purchase process, or use Support/Updates below."
     )
+    buttons = [
+        [Button.inline("Buy", b"buy")],
+        [Button.url("Support", "https://t.me/KustXsupportbot"), Button.url("Updates", f"https://t.me/{ANNOUNCE_CHANNEL}")]
+    ]
+
+    # Send image with caption and buttons
+    try:
+        await bot.send_file(event.chat_id, "https://filehosting.kustbotsweb.workers.dev/t3G.png", caption=caption, parse_mode="md", buttons=buttons)
+    except Exception as e:
+        logger.error(f"Failed to send start image to {event.sender_id}: {e}")
+        # Fallback to text if image fails
+        await event.respond(
+            "Welcome! Please send me your Stake username.\n\n"
+            "**Important:** Premium will be activated on this username. Don't misspell it!"
+        )
+
+    # initialize session store for this user (keeps compatibility with existing username handler)
     user_sessions[event.sender_id] = {}
 
 
@@ -146,9 +166,18 @@ async def support_handler(event):
 @bot.on(events.CallbackQuery(data=b"buy"))
 async def buy_handler(event):
     await event.answer()
-    if "username" not in user_sessions.get(event.sender_id, {}):
-        return await event.respond("Please restart with /start and provide your Stake username first.")
+    # If user hasn't provided username yet, ask for it
+    session = user_sessions.get(event.sender_id)
+    if not session or "username" not in session:
+        # Ensure a session exists so username_handler will accept the next message
+        user_sessions.setdefault(event.sender_id, {})
+        try:
+            await event.edit("Please send your Stake username now (3-50 characters). This will be used to activate premium. Type only the username.")
+        except Exception:
+            await event.respond("Please send your Stake username now (3-50 characters). This will be used to activate premium. Type only the username.")
+        return
 
+    # If username already present, proceed to plan selection
     buttons = [
         [Button.inline("1 Day — 4 USDT", b"plan_1d"),
          Button.inline("7 Days — 8 USDT", b"plan_7d")],
