@@ -37,6 +37,9 @@ user_sessions = {}
 # Store active payment tasks per user
 user_tasks = {}
 
+# Live-looking trusted users counter (starts at 200)
+trusted_users_count = 200
+
 
 def create_invoice(amount: float, currency="USDT", lifetime=60):
     url = f"{OXAPAY_API_BASE}/v1/payment/invoice"
@@ -103,27 +106,41 @@ async def wait_for_payment(user_id: int, track_id: str, label: str, hours: int):
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
 async def start_handler(event):
-    # Prepare caption and buttons for the image welcome message
+    global trusted_users_count
+
+    # increment the live-looking trusted users counter for each /start
+    try:
+        trusted_users_count += 1
+    except Exception:
+        # fallback: if something goes wrong, keep going without crashing
+        pass
+
+    # Prepare caption and buttons for the image welcome message (HTML formatting)
     caption = (
-        "🚀 *KustX — Fastest Stake Auto Code Claimer*\n\n"
-        "Welcome! I'm the fastest Stake auto code claimer — *KustX*.\n\n"
-        "🔒 *Important:* Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
-        "Tap *Buy* to start the purchase process, or use Support/Updates below."
+        "<b>🚀 KustX — Fastest Stake Auto Code Claimer</b>\n\n"
+        "Welcome! I'm the fastest Stake auto code claimer — <b>KustX</b>.\n\n"
+        "🔒 <b>Important:</b> Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
+        f"✅ <b>Trusted by {trusted_users_count} users</b>\n\n"
+        "Tap <b>Buy</b> to start the purchase process, or use <b>Support</b>/<b>Updates</b> below."
     )
     buttons = [
         [Button.inline("Buy", b"buy")],
         [Button.url("Support", "https://t.me/KustXsupportbot"), Button.url("Updates", f"https://t.me/{ANNOUNCE_CHANNEL}")]
     ]
 
-    # Send image with caption and buttons
+    # Send image with caption and buttons (use HTML parse mode)
     try:
-        await bot.send_file(event.chat_id, "https://filehosting.kustbotsweb.workers.dev/t3G.png", caption=caption, parse_mode="md", buttons=buttons)
+        await bot.send_file(event.chat_id, "https://filehosting.kustbotsweb.workers.dev/t3G.png", caption=caption, parse_mode="html", buttons=buttons)
     except Exception as e:
         logger.error(f"Failed to send start image to {event.sender_id}: {e}")
         # Fallback to text if image fails
         await event.respond(
-            "Welcome! Please send me your Stake username.\n\n"
-            "**Important:** Premium will be activated on this username. Don't misspell it!"
+            "<b>🚀 KustX — Fastest Stake Auto Code Claimer</b>\n\n"
+            "Welcome! I'm the fastest Stake auto code claimer — <b>KustX</b>.\n\n"
+            "🔒 <b>Important:</b> Premium will be activated on the Stake username you provide. Don't misspell it!\n\n"
+            f"✅ <b>Trusted by {trusted_users_count} users</b>\n\n"
+            "Tap <b>Buy</b> to start the purchase process, or use <b>Support</b>/<b>Updates</b> below.",
+            parse_mode="html"
         )
 
     # initialize session store for this user (keeps compatibility with existing username handler)
@@ -137,13 +154,13 @@ async def username_handler(event):
 
     username = event.raw_text.strip()
     user_sessions[event.sender_id]["username"] = username
-    text = f"Username saved: `{username}`\n\nChoose your premium plan:"
+    text = f"Username saved: <code>{username}</code>\n\nChoose your premium plan:"
     buttons = [[Button.inline("Buy Premium", b"buy")],
                [Button.url("Support", "https://t.me/KustXsupportbot")]]
     try:
-        await event.edit(text, parse_mode="md", buttons=buttons)
+        await event.edit(text, parse_mode="html", buttons=buttons)
     except Exception:
-        await event.respond(text, parse_mode="md", buttons=buttons)
+        await event.respond(text, parse_mode="html", buttons=buttons)
 
 
 @bot.on(events.NewMessage(pattern=r"^/(help|support)$"))
@@ -234,7 +251,7 @@ async def plan_handler(event):
     session["plan"] = label
 
     text = (
-        f"Plan: *{label}*\nAmount: *{amount} USDT*\n\nClick below to pay (choose your crypto):"
+        f"Plan: <b>{label}</b>\nAmount: <b>{amount} USDT</b>\n\nClick below to pay (choose your crypto):"
     )
     buttons = [
         [Button.url("Pay", pay_url),
@@ -242,9 +259,9 @@ async def plan_handler(event):
         [Button.url("Support", "https://t.me/KustXsupportbot")]
     ]
     try:
-        await event.edit(text, parse_mode="md", buttons=buttons)
+        await event.edit(text, parse_mode="html", buttons=buttons)
     except Exception:
-        await event.respond(text, parse_mode="md", buttons=buttons)
+        await event.respond(text, parse_mode="html", buttons=buttons)
 
     # Start new payment task and store it
     task = asyncio.create_task(wait_for_payment(event.sender_id, track_id, label, hours))
@@ -258,3 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
