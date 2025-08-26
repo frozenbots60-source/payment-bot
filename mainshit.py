@@ -8,8 +8,8 @@ from telethon import TelegramClient, events, Button
 API_ID = 29568441
 API_HASH = "b32ec0fb66d22da6f77d355fbace4f2a"
 BOT_TOKEN = "8296029448:AAGBEIsUyFerlpkyM-G0XjnYfkJw4jd8gko"
-SUPPORT_HANDLE = "kustbotssupport"
-ANNOUNCE_CHANNEL = "KustBotsNetwork"
+SUPPORT_HANDLE = "stake_autoclaimerbot"
+ANNOUNCE_CHANNEL = "kustxcodeclaimer"
 FORWARD_CHANNEL = "kustbotsnetwork"
 FORWARD_MESSAGE_ID = 133
 
