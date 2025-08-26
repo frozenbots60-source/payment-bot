@@ -142,8 +142,8 @@ async def buy_handler(event):
         return await event.respond("Please restart with /start and provide your Stake username first.")
 
     buttons = [
-        [Button.inline("1 Day — 5 USDT", b"plan_1d"),
-         Button.inline("7 Days — 20 USDT", b"plan_7d")]
+        [Button.inline("1 Day — 4 USDT", b"plan_1d"),
+         Button.inline("7 Days — 8 USDT", b"plan_7d")]
     ]
     text = "Choose your plan:"
     try:
