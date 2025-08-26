@@ -19,8 +19,8 @@ OXAPAY_API_BASE = "https://api.oxapay.com"
 
 # Pricing plans
 PLANS = {
-    "1d": {"label": "1 Day", "amount": 0.1, "hours": 24},
-    "7d": {"label": "7 Days", "amount": 20.0, "hours": 168}
+    "1d": {"label": "1 Day", "amount": 4.0, "hours": 24},
+    "7d": {"label": "7 Days", "amount": 8.0, "hours": 168}
 }
 
 PAYMENT_TIMEOUT = 15 * 60  # 15 minutes
