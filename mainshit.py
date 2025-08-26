@@ -118,11 +118,19 @@ async def username_handler(event):
     username = event.raw_text.strip()
     user_sessions[event.sender_id]["username"] = username
     text = f"Username saved: `{username}`\n\nChoose your premium plan:"
-    buttons = [[Button.inline("Buy Premium", b"buy")]]
+    buttons = [[Button.inline("Buy Premium", b"buy")],
+               [Button.url("Support", "https://t.me/KustXsupportbot")]]
     try:
         await event.edit(text, parse_mode="md", buttons=buttons)
     except Exception:
         await event.respond(text, parse_mode="md", buttons=buttons)
+
+
+@bot.on(events.NewMessage(pattern=r"^/(help|support)$"))
+async def help_support_handler(event):
+    text = "Need help? Click below to contact support:"
+    buttons = [[Button.url("Contact Support", "https://t.me/KustXsupportbot")]]
+    await event.respond(text, buttons=buttons)
 
 
 @bot.on(events.CallbackQuery(data=b"support"))
@@ -143,7 +151,8 @@ async def buy_handler(event):
 
     buttons = [
         [Button.inline("1 Day — 4 USDT", b"plan_1d"),
-         Button.inline("7 Days — 8 USDT", b"plan_7d")]
+         Button.inline("7 Days — 8 USDT", b"plan_7d")],
+        [Button.url("Support", "https://t.me/KustXsupportbot")]
     ]
     text = "Choose your plan:"
     try:
@@ -200,7 +209,8 @@ async def plan_handler(event):
     )
     buttons = [
         [Button.url("Pay", pay_url),
-         Button.url("Channel", f"https://t.me/{ANNOUNCE_CHANNEL}")]
+         Button.url("Channel", f"https://t.me/{ANNOUNCE_CHANNEL}")],
+        [Button.url("Support", "https://t.me/KustXsupportbot")]
     ]
     try:
         await event.edit(text, parse_mode="md", buttons=buttons)
