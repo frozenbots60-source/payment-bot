@@ -118,7 +118,7 @@ async def start_handler(event):
 
     # Send image with caption and buttons (use HTML parse mode)
     try:
-        await bot.send_file(event.chat_id, "https://filehosting.kustbotsweb.workers.dev/t9Q.jpg", caption=caption, parse_mode="html", buttons=buttons)
+        await bot.send_file(event.chat_id, "https://filehosting.kustbotsweb.workers.dev/t3G.png", caption=caption, parse_mode="html", buttons=buttons)
     except Exception as e:
         logger.error(f"Failed to send start image to {event.sender_id}: {e}")
         # Fallback to text if image fails
