@@ -19,6 +19,7 @@ UPI_DM_LINK = "https://t.me/KustXoffical"
 # Messages to forward
 FORWARD_1 = ("kustvault", 3)
 FORWARD_2 = ("kustvault", 2)
+FORWARD_3 = ("kustvault", 4)
 
 # Start image
 START_IMAGE_URL = "https://filehosting.kustbotsweb.workers.dev/-p_.jpg"
@@ -123,8 +124,8 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
                     parse_mode="html"
                 )
 
-                # FORWARD + PIN
-                for chat, msg_id in [FORWARD_1, FORWARD_2]:
+                # FORWARD + PIN (now includes the third message)
+                for chat, msg_id in [FORWARD_1, FORWARD_2, FORWARD_3]:
                     try:
                         fwd = await bot.forward_messages(user_id, msg_id, from_peer=chat)
                         if isinstance(fwd, list):
@@ -363,8 +364,8 @@ async def confirm_yes_handler(event):
         except:
             await event.respond(text, parse_mode="html")
 
-        # FORWARD BOTH and try to pin
-        for chat, msg_id in [FORWARD_1, FORWARD_2]:
+        # FORWARD THREE messages and try to pin
+        for chat, msg_id in [FORWARD_1, FORWARD_2, FORWARD_3]:
             try:
                 fwd = await bot.forward_messages(user_id, msg_id, from_peer=chat)
                 if isinstance(fwd, list):
