@@ -180,13 +180,14 @@ async def start_handler(event):
         upsert=True
     )
 
-    # Send start image
-    try:
-        await bot.send_file(user_id, START_IMAGE_URL)
-    except:
-        pass
+    # Caption text to appear with the image
+    caption_text = (
+        "<b>🚀 Kust Bots — Stake Chat Farmer & AI Chat Engine</b>\n\n"
+        "⚡ Automated Chat Farming • AI-Driven Replies • Stealth Anti-Detection Engine\n\n"
+        "Tap a button below to continue."
+    )
 
-    # Buttons
+    # Buttons (same set, displayed under the image caption)
     if first_time:
         buttons = [
             [Button.inline("🎁 Get your free demo now", b"get_demo")],
@@ -204,14 +205,19 @@ async def start_handler(event):
             ],
         ]
 
-    text = (
-        "<b>🚀 Kust Bots — Stake Chat Farmer & AI Chat Engine</b>\n\n"
-        "⚡ Automated Chat Farming • AI-Driven Replies • Stealth Anti-Detection Engine\n\n"
-        "Tap the button below to continue."
-    )
-
     user_sessions[user_id] = {"expecting_username": False}
-    await event.respond(text, parse_mode="html", buttons=buttons)
+
+    # Send the image with the caption, falling back to a text response if sending the file fails
+    try:
+        await bot.send_file(user_id, START_IMAGE_URL, caption=caption_text, parse_mode="html", buttons=buttons)
+    except Exception as e:
+        logger.error(f"send_file failed: {e}")
+        text = (
+            "<b>🚀 Kust Bots — Stake Chat Farmer & AI Chat Engine</b>\n\n"
+            "⚡ Automated Chat Farming • AI-Driven Replies • Stealth Anti-Detection Engine\n\n"
+            "Tap a button below to continue."
+        )
+        await event.respond(text, parse_mode="html", buttons=buttons)
 
 @bot.on(events.NewMessage(pattern=r"^/(help|support)$"))
 async def help_handler(event):
@@ -230,8 +236,11 @@ async def buy_sub_handler(event):
     session.pop("demo_request", None)
 
     text = (
-        "Send your <b>Stake username</b>.\n"
-        "Send only the username (with or without @)."
+        "<b>Buy Subscription — Step 1: Provide your Stake username</b>\n\n"
+        "Send only the username. Examples:\n"
+        "• <code>alice123</code>\n"
+        "• <code>@alice123</code>\n\n"
+        "Do NOT send profile links or screenshots. After you send the username you'll be asked to confirm it."
     )
     try:
         await event.edit(text, parse_mode="html")
@@ -248,36 +257,91 @@ async def get_demo_handler(event):
     session["demo_request"] = True
 
     text = (
-        "🎁 <b>Free Demo (3 hours)</b>\n\n"
-        "Send your Stake username.\n"
-        "One demo per Telegram account + Stake username."
+        "🎁 <b>Free Demo (3 hours) — Step 1: Provide your Stake username</b>\n\n"
+        "Send only the username. Examples:\n"
+        "• <code>alice123</code>\n"
+        "• <code>@alice123</code>\n\n"
+        "One demo per Telegram account + Stake username. After you send the username you'll be asked to confirm it."
     )
     try:
         await event.edit(text, parse_mode="html")
     except:
         await event.respond(text, parse_mode="html")
 
+# When a username-like message is received, store it as pending and ask for confirmation
 @bot.on(events.NewMessage(pattern=r"^[A-Za-z0-9_@]{3,51}$"))
 async def username_handler(event):
     user_id = event.sender_id
-    session = user_sessions.get(user_id)
+    session = user_sessions.setdefault(user_id, {})
 
-    if not session or not session.get("expecting_username"):
-        return
+    if not session.get("expecting_username"):
+        return  # ignore unless we asked for it
 
     raw_username = event.raw_text.strip()
     username_clean = raw_username.lstrip('@')
 
+    # Save as pending until user confirms
+    session["pending_username"] = username_clean
+    session["expecting_username"] = False
+
+    text = (
+        "You entered the Stake username:\n\n"
+        f"<b>@{username_clean}</b>\n\n"
+        "Is this correct?"
+    )
+    buttons = [
+        [Button.inline("✅ Yes, this is my username", b"confirm_username_yes")],
+        [Button.inline("✏️ No — Edit username", b"confirm_username_no")],
+    ]
+
+    await event.respond(text, parse_mode="html", buttons=buttons)
+
+@bot.on(events.CallbackQuery(data=b"confirm_username_no"))
+async def confirm_no_handler(event):
+    await event.answer()
+    user_id = event.sender_id
+    session = user_sessions.setdefault(user_id, {})
+
+    # Allow user to send username again
+    session["expecting_username"] = True
+    session.pop("pending_username", None)
+
+    text = (
+        "Okay — please send your Stake username again.\n\n"
+        "Examples:\n"
+        "• <code>alice123</code>\n"
+        "• <code>@alice123</code>\n\n"
+        "Send only the username (no links)."
+    )
+    try:
+        await event.edit(text, parse_mode="html")
+    except:
+        await event.respond(text, parse_mode="html")
+
+@bot.on(events.CallbackQuery(data=b"confirm_username_yes"))
+async def confirm_yes_handler(event):
+    await event.answer()
+    user_id = event.sender_id
+    session = user_sessions.get(user_id)
+
+    if not session:
+        return await event.respond("Session expired. Restart with /start.")
+
+    pending = session.get("pending_username")
+    if not pending:
+        return await event.respond("No username pending. Please restart with /start and try again.")
+
+    username_clean = pending
+    session.pop("pending_username", None)
     session["username"] = username_clean
     session["expecting_username"] = False
 
-    # DEMO FLOW
+    # If this was a demo request, proceed with demo activation
     if session.get("demo_request"):
         already = demos_col.find_one({"$or": [{"user_id": user_id}, {"username": username_clean}]})
         if already:
-            await event.respond("❌ Demo already used by this username or Telegram account.")
             session.pop("demo_request", None)
-            return
+            return await event.respond("❌ Demo already used by this username or Telegram account.")
 
         expires_at = datetime.now(timezone.utc) + timedelta(hours=3)
         demos_col.insert_one({"user_id": user_id, "username": username_clean, "expires_at": expires_at})
@@ -289,13 +353,17 @@ async def username_handler(event):
 
         activate_subscription(f"@{username_clean}", 3)
 
-        await event.respond(
+        # Prepare response message
+        text = (
             f"✅ Demo activated for <code>@{username_clean}</code>\n"
-            f"Duration: 3 hours.",
-            parse_mode="html"
+            f"Duration: 3 hours."
         )
+        try:
+            await event.edit(text, parse_mode="html")
+        except:
+            await event.respond(text, parse_mode="html")
 
-        # FORWARD BOTH
+        # FORWARD BOTH and try to pin
         for chat, msg_id in [FORWARD_1, FORWARD_2]:
             try:
                 fwd = await bot.forward_messages(user_id, msg_id, from_peer=chat)
@@ -311,9 +379,9 @@ async def username_handler(event):
         session.pop("demo_request", None)
         return
 
-    # PURCHASE FLOW
+    # Otherwise proceed to purchase flow: show payment method selection
     text = (
-        f"Stake username saved: <code>@{username_clean}</code>\n"
+        f"Stake username saved: <code>@{username_clean}</code>\n\n"
         "Choose payment method:"
     )
     buttons = [
@@ -321,7 +389,10 @@ async def username_handler(event):
         [Button.inline("💵 Buy with UPI", b"buy_upi")],
     ]
 
-    await event.respond(text, parse_mode="html", buttons=buttons)
+    try:
+        await event.edit(text, parse_mode="html", buttons=buttons)
+    except:
+        await event.respond(text, parse_mode="html", buttons=buttons)
 
 @bot.on(events.CallbackQuery(data=b"buy_upi"))
 async def buy_upi_handler(event):
@@ -359,12 +430,12 @@ async def buy_crypto_handler(event):
 
     buttons = [
         [
-            Button.inline("1 Day — 2 USDT", b"plan_1d"),
-            Button.inline("2 Days — 4 USDT", b"plan_2d"),
+            Button.inline("1 Day — 2.3 USDT", b"plan_1d"),
+            Button.inline("2 Days — 4.3 USDT", b"plan_2d"),
         ],
         [
-            Button.inline("4 Days — 7.5 USDT", b"plan_4d"),
-            Button.inline("7 Days — 13 USDT", b"plan_7d"),
+            Button.inline("4 Days — 7.8 USDT", b"plan_4d"),
+            Button.inline("7 Days — 13.3 USDT", b"plan_7d"),
         ],
     ]
 
