@@ -1,5 +1,6 @@
 telethon
+pymongo
 requests
 asyncio
-Flask==2.3.3
-Flask-RESTful==0.3.9
+datetime
+logging
