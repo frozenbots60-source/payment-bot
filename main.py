@@ -78,11 +78,11 @@ def query_invoice(track_id: str):
 
 def activate_subscription(username_with_at: str, hours: int):
     try:
-        duration_days = hours / 24
+        # API expects duration in hours. Send hours directly.
         params = {
             "user": username_with_at,
             "admin": "admin1234",
-            "duration": duration_days
+            "duration": hours
         }
         url = ACTIVATION_API_URL
         r = requests.get(url, params=params, timeout=10)
