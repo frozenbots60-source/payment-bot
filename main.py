@@ -41,7 +41,7 @@ OXAPAY_API_BASE = "https://api.oxapay.com"
 ACTIVATION_API_URL = "https://chat-auth-75bd02aa400a.herokuapp.com/auth"
 
 PLANS = {
-    "1d": {"label": "1 Day",  "amount": 2.3,  "hours": 24},
+    "1d": {"label": "1 Day",  "amount": 0.1,  "hours": 24},
     "2d": {"label": "2 Days", "amount": 4.3,  "hours": 48},
     "4d": {"label": "4 Days", "amount": 7.8,  "hours": 96},
     "7d": {"label": "7 Days", "amount": 13.3, "hours": 168},
