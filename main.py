@@ -41,10 +41,12 @@ OXAPAY_API_BASE = "https://api.oxapay.com"
 ACTIVATION_API_URL = "https://chat-auth-75bd02aa400a.herokuapp.com/auth"
 
 PLANS = {
-    "1d": {"label": "1 Day",  "amount": 0.1,  "hours": 24},
-    "2d": {"label": "2 Days", "amount": 4.3,  "hours": 48},
-    "4d": {"label": "4 Days", "amount": 7.8,  "hours": 96},
-    "7d": {"label": "7 Days", "amount": 13.3, "hours": 168},
+    "6h":  {"label": "6 Hours",   "amount": 0.8,  "hours": 6},
+    "12h": {"label": "12 Hours",  "amount": 1.3,  "hours": 12},
+    "1d":  {"label": "1 Day",     "amount": 2.3,  "hours": 24},
+    "2d":  {"label": "2 Days",    "amount": 4.3,  "hours": 48},
+    "4d":  {"label": "4 Days",    "amount": 7.8,  "hours": 96},
+    "7d":  {"label": "7 Days",    "amount": 13.3, "hours": 168},
 }
 
 PAYMENT_TIMEOUT = 15 * 60
@@ -388,6 +390,10 @@ async def confirm_yes_handler(event):
     buttons = [
         [Button.inline("💳 Buy with Crypto", b"buy_crypto")],
         [Button.inline("💵 Buy with UPI", b"buy_upi")],
+        [
+            Button.url("🛠 Support", SUPPORT_CHAT_LINK),
+            Button.url("📢 Updates", UPDATES_CHANNEL_LINK),
+        ],
     ]
 
     try:
@@ -422,14 +428,20 @@ async def buy_crypto_handler(event):
     text = (
         "💳 <b>Buy with Crypto (OxaPay)</b>\n\n"
         "Plans:\n"
-        "• 1 Day  — 2 USDT\n"
-        "• 2 Days — 4 USDT\n"
-        "• 4 Days — 7.5 USDT\n"
-        "• 7 Days — 13 USDT\n\n"
+        "• 6 Hours  — 0.8 USDT\n"
+        "• 12 Hours — 1.3 USDT\n"
+        "• 1 Day    — 2.3 USDT\n"
+        "• 2 Days   — 4.3 USDT\n"
+        "• 4 Days   — 7.8 USDT\n"
+        "• 7 Days   — 13.3 USDT\n\n"
         "Select your plan:"
     )
 
     buttons = [
+        [
+            Button.inline("6 Hours — 0.8 USDT", b"plan_6h"),
+            Button.inline("12 Hours — 1.3 USDT", b"plan_12h"),
+        ],
         [
             Button.inline("1 Day — 2.3 USDT", b"plan_1d"),
             Button.inline("2 Days — 4.3 USDT", b"plan_2d"),
