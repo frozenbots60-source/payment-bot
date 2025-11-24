@@ -63,43 +63,83 @@ user_tasks = {}
 # ================== OXAPAY HELPERS ==================
 
 def create_invoice(amount: float, currency: str = "USDT", lifetime: int = 60):
+    """
+    Synchronous network call to create invoice. Returns raw JSON.
+    """
     url = f"{OXAPAY_API_BASE}/v1/payment/invoice"
     headers = {"merchant_api_key": OXAPAY_API_KEY, "Content-Type": "application/json"}
     body = {"amount": amount, "currency": currency, "lifetime": lifetime}
-    r = requests.post(url, headers=headers, json=body, timeout=10)
+    r = requests.post(url, headers=headers, json=body, timeout=15)
     r.raise_for_status()
     return r.json()
 
 def query_invoice(track_id: str):
+    """
+    Synchronous network call to query invoice. Returns raw JSON.
+    """
     url = f"{OXAPAY_API_BASE}/merchants/inquiry"
     headers = {"Content-Type": "application/json"}
     body = {"merchant": OXAPAY_API_KEY, "trackId": track_id}
-    r = requests.post(url, headers=headers, json=body, timeout=10)
+    r = requests.post(url, headers=headers, json=body, timeout=15)
     r.raise_for_status()
     return r.json()
 
 def activate_subscription(username_with_at: str, hours: int):
+    """
+    Synchronous activation call. Kept synchronous intentionally but will be executed in a thread by the async caller.
+    """
     try:
-        # API expects duration in hours. Send hours directly.
         params = {
             "user": username_with_at,
             "admin": "admin1234",
             "duration": hours
         }
         url = ACTIVATION_API_URL
-        r = requests.get(url, params=params, timeout=10)
+        # use GET as original code (if your server expects POST change to requests.post)
+        r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
-        logger.info(f"Activated subscription for {username_with_at} for {hours} hours")
+        logger.info(f"[ACTIVATE] Activated subscription for {username_with_at} for {hours} hours. Response: {r.text}")
+        return True
     except Exception as e:
-        logger.error(f"Failed activation API: {e}")
+        logger.exception(f"[ACTIVATE] Failed activation API for {username_with_at}: {e}")
+        return False
+
+def extract_status_from_query_response(resp_json):
+    """
+    OxaPay responses may vary. Try multiple common paths to find a status string.
+    """
+    if not resp_json:
+        return None
+    # direct status field
+    status = None
+    if isinstance(resp_json, dict):
+        status = resp_json.get("status")
+        if status:
+            return str(status).lower()
+        # sometimes nested
+        data = resp_json.get("data") or resp_json.get("result") or resp_json.get("response")
+        if isinstance(data, dict):
+            s = data.get("status") or data.get("payment_status") or data.get("state")
+            if s:
+                return str(s).lower()
+        # sometimes a list
+        if isinstance(resp_json.get("data"), list) and len(resp_json.get("data")) > 0:
+            el = resp_json.get("data")[0]
+            if isinstance(el, dict):
+                s = el.get("status")
+                if s:
+                    return str(s).lower()
+    return None
 
 async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
     session = user_sessions.get(user_id)
     if not session:
+        logger.warning(f"wait_for_payment: no session for {user_id}")
         return False
 
     plan = PLANS.get(plan_key)
     if not plan:
+        logger.warning(f"wait_for_payment: invalid plan {plan_key}")
         return False
 
     label = plan["label"]
@@ -109,14 +149,20 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
     while time.time() - start < PAYMENT_TIMEOUT:
         await asyncio.sleep(POLL_INTERVAL)
         try:
+            # run blocking network call in a thread
             data = await asyncio.to_thread(query_invoice, track_id)
-            status = data.get("status", "").lower()
+            status = extract_status_from_query_response(data) or ""
+            status = status.lower()
+
+            logger.info(f"Invoice {track_id} status check: {status}")
 
             if status == "paid":
                 username_clean = session.get("username", "UNKNOWN")
 
-                activate_subscription(f"@{username_clean}", hours)
+                # call activation API in a background thread to avoid blocking
+                activation_ok = await asyncio.to_thread(activate_subscription, f"@{username_clean}", hours)
 
+                # Notify user
                 await bot.send_message(
                     user_id,
                     f"✅ Payment confirmed!\n\n"
@@ -127,27 +173,45 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
                 )
 
                 # FORWARD + PIN (now includes the third message)
-                for chat, msg_id in [FORWARD_1, FORWARD_2, FORWARD_3]:
+                forwards = [FORWARD_1, FORWARD_2, FORWARD_3]
+                for chat, msg_id in forwards:
                     try:
-                        fwd = await bot.forward_messages(user_id, msg_id, from_peer=chat)
+                        # Resolve source entity once
+                        try:
+                            source_entity = await bot.get_entity(chat)
+                        except Exception as e:
+                            logger.error(f"Could not resolve source entity '{chat}': {e}")
+                            source_entity = chat  # fallback to original value, let forward_messages handle it
+
+                        # Forward the message to the user (destination = user_id)
+                        fwd = await bot.forward_messages(entity=user_id, messages=msg_id, from_peer=source_entity)
+                        # forward_messages may return list
                         if isinstance(fwd, list):
                             fwd = fwd[0]
+                        # Try pinning
                         try:
+                            # pin_message(entity, message) – entity can be user_id
                             await bot.pin_message(user_id, fwd.id, notify=True)
-                        except:
+                        except Exception:
+                            # not critical
                             pass
                     except Exception as e:
-                        logger.error(f"Forward error: {e}")
+                        logger.exception(f"Forward error for {chat} msg {msg_id}: {e}")
+
+                # Log activation result if needed
+                if not activation_ok:
+                    logger.warning(f"Activation API returned failure for @{username_clean} after payment {track_id}")
 
                 return True
 
-            if status in ("expired", "cancelled"):
+            if status in ("expired", "cancelled", "cancel", "failed"):
                 await bot.send_message(user_id, f"❌ Invoice for {label} expired or cancelled.")
                 return False
 
         except Exception as e:
-            logger.error(f"Invoice query error: {e}")
+            logger.exception(f"Invoice query error for track {track_id}: {e}")
 
+    # timeout reached
     await bot.send_message(user_id, "⏳ Payment not confirmed. Create a new invoice.")
     return False
 
@@ -354,7 +418,8 @@ async def confirm_yes_handler(event):
             upsert=True
         )
 
-        activate_subscription(f"@{username_clean}", 3)
+        # Run activation in thread to avoid blocking
+        await asyncio.to_thread(activate_subscription, f"@{username_clean}", 3)
 
         # Prepare response message
         text = (
@@ -369,15 +434,21 @@ async def confirm_yes_handler(event):
         # FORWARD THREE messages and try to pin
         for chat, msg_id in [FORWARD_1, FORWARD_2, FORWARD_3]:
             try:
-                fwd = await bot.forward_messages(user_id, msg_id, from_peer=chat)
+                try:
+                    source_entity = await bot.get_entity(chat)
+                except Exception as e:
+                    logger.error(f"Could not resolve demo forward source '{chat}': {e}")
+                    source_entity = chat
+
+                fwd = await bot.forward_messages(entity=user_id, messages=msg_id, from_peer=source_entity)
                 if isinstance(fwd, list):
                     fwd = fwd[0]
                 try:
                     await bot.pin_message(user_id, fwd.id, notify=True)
-                except:
+                except Exception:
                     pass
             except Exception as e:
-                logger.error(f"Demo forward error: {e}")
+                logger.exception(f"Demo forward error: {e}")
 
         session.pop("demo_request", None)
         return
@@ -474,22 +545,42 @@ async def plan_handler(event):
     amount = plan["amount"]
     label = plan["label"]
 
+    # cancel previous task if running
     if user_id in user_tasks:
         old = user_tasks[user_id]
         if not old.done():
             old.cancel()
 
+    # create invoice in a worker thread
     try:
         resp = await asyncio.to_thread(create_invoice, amount)
     except Exception as e:
-        logger.error(f"Invoice error: {e}")
+        logger.exception(f"Invoice error: {e}")
         return await event.respond("Failed to create invoice.")
 
-    data = resp.get("data", {})
-    track_id = data.get("track_id") or data.get("trackId")
-    pay_url = data.get("payment_url") or data.get("paymentUrl")
+    # RESP parsing: try multiple paths for track id and payment url
+    data = resp if isinstance(resp, dict) else {}
+    # Common shapes
+    track_id = None
+    pay_url = None
+    # check top-level
+    if isinstance(data, dict):
+        track_id = data.get("track_id") or data.get("trackId") or data.get("trackid")
+        pay_url = data.get("payment_url") or data.get("paymentUrl") or data.get("url")
+        # nested 'data' object
+        nested = data.get("data") if isinstance(data.get("data"), dict) else None
+        if nested:
+            track_id = track_id or nested.get("track_id") or nested.get("trackId") or nested.get("trackid")
+            pay_url = pay_url or nested.get("payment_url") or nested.get("paymentUrl") or nested.get("url")
+        # sometimes list
+        if not track_id and isinstance(data.get("data"), list) and len(data.get("data")) > 0:
+            el = data.get("data")[0]
+            if isinstance(el, dict):
+                track_id = el.get("track_id") or el.get("trackId") or el.get("trackid")
+                pay_url = el.get("payment_url") or el.get("paymentUrl") or el.get("url")
 
     if not track_id or not pay_url:
+        logger.error(f"Payment gateway returned unexpected response: {resp}")
         return await event.respond("Payment gateway error.")
 
     session["track_id"] = track_id
