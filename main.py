@@ -174,6 +174,7 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
 
                 # Persist username to DB if not present
                 try:
+                    # allow username field to be list or string; store as string if single
                     users_col.update_one({"user_id": user_id}, {"$set": {"username": username_clean}}, upsert=True)
                 except Exception:
                     logger.exception("Failed to update DB with username on payment.")
@@ -500,43 +501,119 @@ async def edit_username_handler(event):
 
     session = user_sessions.setdefault(user_id, {})
 
-    # Try to determine the old username from session or DB
-    old_username = session.get("username")
-    if not old_username:
-        # check DB
+    # Collect usernames associated with this Telegram account from DB
+    usernames = []
+
+    try:
+        # primary users_col record
         rec = users_col.find_one({"user_id": user_id})
         if rec:
-            old_username = rec.get("username")
-        if not old_username:
-            # check demos
-            rec = demos_col.find_one({"user_id": user_id})
-            if rec:
-                old_username = rec.get("username")
+            u = rec.get("username")
+            if isinstance(u, list):
+                for x in u:
+                    if x:
+                        usernames.append(x)
+            elif isinstance(u, str) and u:
+                usernames.append(u)
+            # also check demo_username if present
+            du = rec.get("demo_username")
+            if du:
+                usernames.append(du)
+    except Exception:
+        logger.exception("Error querying users_col for edit_username flow.")
 
-    if not old_username:
-        # We don't know their current username - ask for both old and new manually
+    try:
+        # demos_col may have multiple demo records
+        for d in demos_col.find({"user_id": user_id}):
+            du = d.get("username")
+            if du:
+                usernames.append(du)
+    except Exception:
+        logger.exception("Error querying demos_col for edit_username flow.")
+
+    # dedupe and clean
+    usernames = list(dict.fromkeys([x.lstrip("@").strip() for x in usernames if x]))
+
+    if not usernames:
+        # No stored usernames found — ask user to send the new username directly
         session["expecting_rename"] = True
         session["rename_old"] = None
         text = (
             "<b>Edit username</b>\n\n"
             "I don't have a stored username for your account. Please send the <b>new</b> Stake username you want to use.\n\n"
-            "If the old username is different or you need to rename a different account, we'll attempt to call the rename API but you might need to contact support if it fails."
+            "If you need to rename a previously registered username, you can provide the old username first in the rename API format by contacting support."
         )
-    else:
+        try:
+            await event.edit(text, parse_mode="html")
+        except:
+            await event.respond(text, parse_mode="html")
+        return
+
+    if len(usernames) == 1:
+        # only one username — ask for new username directly
         session["expecting_rename"] = True
-        session["rename_old"] = old_username
+        session["rename_old"] = usernames[0]
         text = (
             "<b>Edit username</b>\n\n"
-            f"Current saved username: <code>@{old_username}</code>\n\n"
+            f"Current saved username: <code>@{usernames[0]}</code>\n\n"
             "Send the new Stake username you want to replace it with. Example:\n"
             "• <code>@newname</code>\n            or\n"
             "• <code>newname</code>"
         )
+        try:
+            await event.edit(text, parse_mode="html")
+        except:
+            await event.respond(text, parse_mode="html")
+        return
 
+    # multiple usernames — show buttons for selection
+    buttons = []
+    for name in usernames:
+        buttons.append([Button.inline(f"✏️ @{name}", f"edit_select:{name}")])
+    buttons.append([Button.inline("❌ Cancel", b"edit_cancel")])
+    text = "<b>Edit username</b>\n\nSelect which username you want to edit:"
+    try:
+        await event.edit(text, parse_mode="html", buttons=buttons)
+    except:
+        await event.respond(text, parse_mode="html", buttons=buttons)
+
+@bot.on(events.CallbackQuery(pattern=b"edit_select:"))
+async def edit_select_handler(event):
+    await event.answer()
+    user_id = event.sender_id
+    payload = event.data.decode()
+    # format: edit_select:username
+    try:
+        _, username = payload.split(":", 1)
+    except Exception:
+        return await event.respond("Invalid selection.")
+
+    username_clean = username.lstrip("@").strip()
+    session = user_sessions.setdefault(user_id, {})
+    session["expecting_rename"] = True
+    session["rename_old"] = username_clean
+
+    text = (
+        "<b>Edit username</b>\n\n"
+        f"Selected username: <code>@{username_clean}</code>\n\n"
+        "Send the new Stake username you want to replace it with. Example:\n"
+        "• <code>@newname</code>\n            or\n"
+        "• <code>newname</code>"
+    )
     try:
         await event.edit(text, parse_mode="html")
     except:
         await event.respond(text, parse_mode="html")
+
+@bot.on(events.CallbackQuery(data=b"edit_cancel"))
+async def edit_cancel_handler(event):
+    await event.answer()
+    user_id = event.sender_id
+    # clear rename state
+    session = user_sessions.setdefault(user_id, {})
+    session.pop("expecting_rename", None)
+    session.pop("rename_old", None)
+    await event.edit("Edit cancelled.", parse_mode="html")
 
 # When a username-like message is received, store it as pending and ask for confirmation
 @bot.on(events.NewMessage(pattern=r"^[A-Za-z0-9_@]{3,51}$"))
@@ -569,7 +646,15 @@ async def username_handler(event):
             try:
                 resp = await asyncio.to_thread(rename_user_api, "", new_username)
                 # Accept success if API responds ok; adapt if API returns other status shape
-                users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
+                if isinstance(resp, dict) and resp.get("ok") is False:
+                    # API returned structured failure
+                    await event.respond(f"❌ Rename API reported failure: {resp}", parse_mode="html")
+                    return
+                # Update DB: add this username to user's record
+                try:
+                    users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
+                except Exception:
+                    logger.exception("Failed to persist new username to DB after rename_api with unknown old.")
                 session["username"] = new_username
                 await event.respond(f"✅ Username updated locally to <code>@{new_username}</code>. Rename API response: {resp}", parse_mode="html")
             except Exception as e:
@@ -579,7 +664,13 @@ async def username_handler(event):
         # Call rename API with both old and new
         try:
             resp = await asyncio.to_thread(rename_user_api, old_username, new_username)
-            # On success, update DB records that reference the old username
+            # resp is a structured dict indicating ok or error; check and update DB accordingly
+            if isinstance(resp, dict) and resp.get("ok") is False:
+                # API reported failure; notify user but do not crash
+                await event.respond(f"❌ Rename API reported failure: {resp}\n\nLocal username not changed. Contact support if needed.", parse_mode="html")
+                return
+
+            # On success (or ambiguous success), update DB records that reference the old username
             try:
                 users_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
                 demos_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
