@@ -253,6 +253,12 @@ def rename_user_api(old_username: str, new_username: str):
     Returns response JSON-like dict. DOES NOT raise on HTTP error; returns an error dict instead.
     """
     try:
+        # Ensure usernames start with @
+        if old_username and not old_username.startswith("@"):
+            old_username = f"@{old_username}"
+        if new_username and not new_username.startswith("@"):
+            new_username = f"@{new_username}"
+            
         # include admin credentials as the activation API expects (same as activate_subscription)
         data = {"old_username": old_username, "new_username": new_username, "admin": "admin1234"}
         r = requests.post(RENAME_USER_ENDPOINT, data=data, timeout=20)
@@ -534,13 +540,38 @@ async def edit_username_handler(event):
     # dedupe and clean
     usernames = list(dict.fromkeys([x.lstrip("@").strip() for x in usernames if x]))
 
-    if not usernames:
-        # No stored usernames found — ask user to send the new username directly
+    # Get active users from API to filter and get additional info
+    active_users_data = await asyncio.to_thread(get_active_users)
+    active_usernames = {}
+    
+    if active_users_data and "active_users" in active_users_data:
+        for user in active_users_data["active_users"]:
+            username = user.get("username", "").lstrip("@").strip()
+            if username:
+                expires = user.get("expires", "")
+                time_left = user.get("time_left", "")
+                active_usernames[username] = {
+                    "expires": expires,
+                    "time_left": time_left
+                }
+
+    # Filter usernames to only show active ones
+    active_usernames_for_user = []
+    for username in usernames:
+        if username in active_usernames:
+            active_usernames_for_user.append({
+                "username": username,
+                "expires": active_usernames[username]["expires"],
+                "time_left": active_usernames[username]["time_left"]
+            })
+
+    if not active_usernames_for_user:
+        # No active usernames found — ask user to send the new username directly
         session["expecting_rename"] = True
         session["rename_old"] = None
         text = (
             "<b>Edit username</b>\n\n"
-            "I don't have a stored username for your account. Please send the <b>new</b> Stake username you want to use.\n\n"
+            "You don't have any active Stake usernames. Please send the <b>new</b> Stake username you want to use.\n\n"
             "If you need to rename a previously registered username, you can provide the old username first in the rename API format by contacting support."
         )
         try:
@@ -549,13 +580,16 @@ async def edit_username_handler(event):
             await event.respond(text, parse_mode="html")
         return
 
-    if len(usernames) == 1:
+    if len(active_usernames_for_user) == 1:
         # only one username — ask for new username directly
         session["expecting_rename"] = True
-        session["rename_old"] = usernames[0]
+        session["rename_old"] = active_usernames_for_user[0]["username"]
+        user_info = active_usernames_for_user[0]
         text = (
             "<b>Edit username</b>\n\n"
-            f"Current saved username: <code>@{usernames[0]}</code>\n\n"
+            f"Current active username: <code>@{user_info['username']}</code>\n"
+            f"Expires: {user_info['expires']}\n"
+            f"Time left: {user_info['time_left']}\n\n"
             "Send the new Stake username you want to replace it with. Example:\n"
             "• <code>@newname</code>\n            or\n"
             "• <code>newname</code>"
@@ -566,12 +600,17 @@ async def edit_username_handler(event):
             await event.respond(text, parse_mode="html")
         return
 
-    # multiple usernames — show buttons for selection
+    # multiple usernames — show buttons for selection with details
     buttons = []
-    for name in usernames:
-        buttons.append([Button.inline(f"✏️ @{name}", f"edit_select:{name}")])
+    for user_info in active_usernames_for_user:
+        username = user_info["username"]
+        expires = user_info["expires"]
+        time_left = user_info["time_left"]
+        button_text = f"✏️ @{username} ({time_left} left)"
+        buttons.append([Button.inline(button_text, f"edit_select:{username}")])
     buttons.append([Button.inline("❌ Cancel", b"edit_cancel")])
-    text = "<b>Edit username</b>\n\nSelect which username you want to edit:"
+    
+    text = "<b>Select which active username you want to edit:</b>"
     try:
         await event.edit(text, parse_mode="html", buttons=buttons)
     except:
@@ -593,9 +632,25 @@ async def edit_select_handler(event):
     session["expecting_rename"] = True
     session["rename_old"] = username_clean
 
+    # Get active users from API to show additional info
+    active_users_data = await asyncio.to_thread(get_active_users)
+    user_info = {"expires": "Unknown", "time_left": "Unknown"}
+    
+    if active_users_data and "active_users" in active_users_data:
+        for user in active_users_data["active_users"]:
+            api_username = user.get("username", "").lstrip("@").strip()
+            if api_username == username_clean:
+                user_info = {
+                    "expires": user.get("expires", "Unknown"),
+                    "time_left": user.get("time_left", "Unknown")
+                }
+                break
+
     text = (
         "<b>Edit username</b>\n\n"
-        f"Selected username: <code>@{username_clean}</code>\n\n"
+        f"Selected username: <code>@{username_clean}</code>\n"
+        f"Expires: {user_info['expires']}\n"
+        f"Time left: {user_info['time_left']}\n\n"
         "Send the new Stake username you want to replace it with. Example:\n"
         "• <code>@newname</code>\n            or\n"
         "• <code>newname</code>"
@@ -672,10 +727,18 @@ async def username_handler(event):
 
             # On success (or ambiguous success), update DB records that reference the old username
             try:
+                # Update the main username record
                 users_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
                 demos_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
+                
                 # Also update this user's DB entry
                 users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
+                
+                # Remove old username from any lists of usernames
+                users_col.update_many(
+                    {"usernames": {"$elemMatch": {"$eq": old_username}}},
+                    {"$pull": {"usernames": old_username}}
+                )
             except Exception:
                 logger.exception("Failed to update DB entries after rename API success.")
 
