@@ -38,7 +38,10 @@ BOT_OWNER_ID = 7618467489
 OXAPAY_API_KEY = "SNJEE3-MOEI0B-ZR0FW4-UWSLXH"
 OXAPAY_API_BASE = "https://api.oxapay.com"
 
-ACTIVATION_API_URL = "https://chat-auth-75bd02aa400a.herokuapp.com/auth"
+# Activation / support API base
+ACTIVATION_API_URL = "https://chat-auth-75bd02aa400a.herokuapp.com"
+ACTIVE_USERS_ENDPOINT = f"{ACTIVATION_API_URL}/active_users"
+RENAME_USER_ENDPOINT = f"{ACTIVATION_API_URL}/rename_user"
 
 PLANS = {
     "6h":  {"label": "6 Hours",   "amount": 0.8,  "hours": 6},
@@ -52,6 +55,10 @@ PLANS = {
 PAYMENT_TIMEOUT = 15 * 60
 POLL_INTERVAL = 10
 
+# Active users checker settings
+ACTIVE_USERS_POLL_INTERVAL = 300  # seconds between active_users polls (5 minutes)
+REMINDER_THRESHOLD_MINUTES = 60   # notify when <= 60 minutes remain
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("stake_farmer_payment_bot")
 
@@ -59,6 +66,9 @@ bot = TelegramClient("stake_farmer_payment_session", API_ID, API_HASH).start(bot
 
 user_sessions = {}
 user_tasks = {}
+
+# keep track of reminders sent to avoid duplicates: { username_lc: expires_iso }
+_reminder_sent = {}
 
 # ================== OXAPAY HELPERS ==================
 
@@ -94,7 +104,7 @@ def activate_subscription(username_with_at: str, hours: int):
             "admin": "admin1234",
             "duration": hours
         }
-        url = ACTIVATION_API_URL
+        url = f"{ACTIVATION_API_URL}/auth"  # original code used /auth
         # use GET as original code (if your server expects POST change to requests.post)
         r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
@@ -162,6 +172,12 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
                 # call activation API in a background thread to avoid blocking
                 activation_ok = await asyncio.to_thread(activate_subscription, f"@{username_clean}", hours)
 
+                # Persist username to DB if not present
+                try:
+                    users_col.update_one({"user_id": user_id}, {"$set": {"username": username_clean}}, upsert=True)
+                except Exception:
+                    logger.exception("Failed to update DB with username on payment.")
+
                 # Notify user
                 await bot.send_message(
                     user_id,
@@ -215,6 +231,131 @@ async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
     await bot.send_message(user_id, "⏳ Payment not confirmed. Create a new invoice.")
     return False
 
+# ================== RENAME / ACTIVE USERS API HELPERS ==================
+
+def get_active_users():
+    """
+    Call GET /active_users on the activation API.
+    Returns parsed JSON or None on failure.
+    """
+    try:
+        r = requests.get(ACTIVE_USERS_ENDPOINT, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.exception(f"Failed to fetch active users: {e}")
+        return None
+
+def rename_user_api(old_username: str, new_username: str):
+    """
+    POST /rename_user with form fields old_username and new_username.
+    Returns response JSON or raises on error.
+    """
+    try:
+        data = {"old_username": old_username, "new_username": new_username}
+        r = requests.post(RENAME_USER_ENDPOINT, data=data, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.exception(f"rename_user_api error: {e}")
+        raise
+
+# ================== ACTIVE USERS CHECKER (background) ==================
+
+def _parse_iso_datetime(s: str):
+    try:
+        # Some servers return microseconds, some may not. datetime.fromisoformat handles both.
+        return datetime.fromisoformat(s)
+    except Exception:
+        try:
+            # fallback: try removing trailing Z or timezone stuff
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+async def check_active_users_loop():
+    """
+    Background loop: poll active_users endpoint and send reminders for subscriptions about to expire.
+    """
+    await asyncio.sleep(5)  # small delay to allow bot to fully start
+    logger.info("Active users reminder loop started.")
+    while True:
+        try:
+            data = await asyncio.to_thread(get_active_users)
+            if not data:
+                logger.debug("No active users data returned.")
+            else:
+                users = data.get("active_users") if isinstance(data, dict) else None
+                if isinstance(users, list):
+                    now = datetime.now(timezone.utc)
+                    for entry in users:
+                        try:
+                            expires_raw = entry.get("expires")
+                            username = entry.get("username")  # e.g. "@alice"
+                            if not expires_raw or not username:
+                                continue
+                            expires_dt = _parse_iso_datetime(expires_raw)
+                            if not expires_dt:
+                                continue
+
+                            # Convert to tz-aware UTC if naive
+                            if expires_dt.tzinfo is None:
+                                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+                            time_left = expires_dt - now
+                            minutes_left = time_left.total_seconds() / 60
+
+                            username_clean = username.lstrip("@").strip()
+                            if minutes_left <= REMINDER_THRESHOLD_MINUTES and minutes_left > 0:
+                                # check whether we've already sent reminder for this exact expiry
+                                previous = _reminder_sent.get(username_clean.lower())
+                                expires_iso = expires_dt.isoformat()
+                                if previous == expires_iso:
+                                    # already reminded for this expiry
+                                    continue
+
+                                # find the Telegram user_id from DB
+                                rec = users_col.find_one({"username": username_clean})
+                                if not rec:
+                                    # try demo collection
+                                    rec = demos_col.find_one({"username": username_clean})
+                                if not rec:
+                                    logger.info(f"Active user {username_clean} not found in local DB; skipping reminder.")
+                                    # do not set _reminder_sent so if they register later we can still notify
+                                    continue
+
+                                user_id = rec.get("user_id")
+                                if not user_id:
+                                    logger.info(f"No user_id for {username_clean} in DB; skipping.")
+                                    continue
+
+                                # Send reminder message with Renew button
+                                try:
+                                    rem_text = (
+                                        f"⏳ <b>Subscription ending soon</b>\n\n"
+                                        f"Your Stake username <code>@{username_clean}</code> subscription expires at {expires_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
+                                        f"Time left: approximately {int(minutes_left)} minutes.\n\n"
+                                        "Renew now to avoid interruption."
+                                    )
+                                    buttons = [
+                                        [Button.inline("💳 Renew Now", b"buy_crypto")],
+                                        [Button.url("🛠 Support", SUPPORT_CHAT_LINK)],
+                                    ]
+                                    await bot.send_message(user_id, rem_text, parse_mode="html", buttons=buttons)
+                                    logger.info(f"Sent reminder to @{username_clean} (uid={user_id})")
+                                    _reminder_sent[username_clean.lower()] = expires_iso
+                                except Exception as e:
+                                    logger.exception(f"Failed to send reminder to {username_clean}: {e}")
+                                    # do not set reminder flag so retry next time
+                        except Exception as ee:
+                            logger.exception(f"Error processing active user entry: {ee}")
+                else:
+                    logger.debug("active_users key missing or not a list.")
+        except Exception as e:
+            logger.exception(f"check_active_users_loop error: {e}")
+
+        await asyncio.sleep(ACTIVE_USERS_POLL_INTERVAL)
+
 # ================== HANDLERS ==================
 
 @bot.on(events.NewMessage(pattern=r"^/start$"))
@@ -266,13 +407,15 @@ async def start_handler(event):
     else:
         buttons = [
             [Button.inline("💰 Buy Subscription", b"buy_sub")],
+            [Button.inline("✏️ Edit username", b"edit_username")],
             [
                 Button.url("🛠 Support", SUPPORT_CHAT_LINK),
                 Button.url("📢 Updates", UPDATES_CHANNEL_LINK),
             ],
         ]
 
-    user_sessions[user_id] = {"expecting_username": False}
+    # initialize session state if not present
+    user_sessions.setdefault(user_id, {"expecting_username": False})
 
     # Send the image with the caption, falling back to a text response if sending the file fails
     try:
@@ -335,17 +478,114 @@ async def get_demo_handler(event):
     except:
         await event.respond(text, parse_mode="html")
 
+@bot.on(events.CallbackQuery(data=b"edit_username"))
+async def edit_username_handler(event):
+    await event.answer()
+    user_id = event.sender_id
+
+    session = user_sessions.setdefault(user_id, {})
+
+    # Try to determine the old username from session or DB
+    old_username = session.get("username")
+    if not old_username:
+        # check DB
+        rec = users_col.find_one({"user_id": user_id})
+        if rec:
+            old_username = rec.get("username")
+        if not old_username:
+            # check demos
+            rec = demos_col.find_one({"user_id": user_id})
+            if rec:
+                old_username = rec.get("username")
+
+    if not old_username:
+        # We don't know their current username - ask for both old and new manually
+        session["expecting_rename"] = True
+        session["rename_old"] = None
+        text = (
+            "<b>Edit username</b>\n\n"
+            "I don't have a stored username for your account. Please send the <b>new</b> Stake username you want to use.\n\n"
+            "If the old username is different or you need to rename a different account, we'll attempt to call the rename API but you might need to contact support if it fails."
+        )
+    else:
+        session["expecting_rename"] = True
+        session["rename_old"] = old_username
+        text = (
+            "<b>Edit username</b>\n\n"
+            f"Current saved username: <code>@{old_username}</code>\n\n"
+            "Send the new Stake username you want to replace it with. Example:\n"
+            "• <code>@newname</code>\n            or\n"
+            "• <code>newname</code>"
+        )
+
+    try:
+        await event.edit(text, parse_mode="html")
+    except:
+        await event.respond(text, parse_mode="html")
+
 # When a username-like message is received, store it as pending and ask for confirmation
 @bot.on(events.NewMessage(pattern=r"^[A-Za-z0-9_@]{3,51}$"))
 async def username_handler(event):
     user_id = event.sender_id
     session = user_sessions.setdefault(user_id, {})
 
-    if not session.get("expecting_username"):
-        return  # ignore unless we asked for it
-
     raw_username = event.raw_text.strip()
     username_clean = raw_username.lstrip('@')
+
+    # RENAME flow (user sent new username to replace old)
+    if session.get("expecting_rename"):
+        session.pop("expecting_rename", None)
+        old_username = session.pop("rename_old", None)
+
+        # If old_username not known, attempt to find in DB by user_id
+        if not old_username:
+            rec = users_col.find_one({"user_id": user_id})
+            if rec:
+                old_username = rec.get("username")
+            if not old_username:
+                rec = demos_col.find_one({"user_id": user_id})
+                if rec:
+                    old_username = rec.get("username")
+
+        new_username = username_clean
+
+        if not old_username:
+            # We don't know the old username; try rename API with only new_username (API might fail)
+            try:
+                resp = await asyncio.to_thread(rename_user_api, "", new_username)
+                # Accept success if API responds 200; adapt if API returns other status shape
+                users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
+                session["username"] = new_username
+                await event.respond(f"✅ Username updated locally to <code>@{new_username}</code>. Rename API response: {resp}", parse_mode="html")
+            except Exception as e:
+                await event.respond(f"❌ Failed to call rename API. Error: {e}\n\nYour local username was not changed. Please contact support.", parse_mode="html")
+            return
+
+        # Call rename API with both old and new
+        try:
+            resp = await asyncio.to_thread(rename_user_api, old_username, new_username)
+            # On success, update DB records that reference the old username
+            # Update users_col entries where username == old_username -> set to new_username
+            try:
+                users_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
+                demos_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
+                # Also update this user's DB entry
+                users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
+            except Exception:
+                logger.exception("Failed to update DB entries after rename API success.")
+
+            # update session
+            session["username"] = new_username
+
+            await event.respond(f"✅ Username changed from <code>@{old_username}</code> to <code>@{new_username}</code>.\n\nRename API response: {resp}", parse_mode="html")
+        except Exception as e:
+            logger.exception("Rename API call failed.")
+            await event.respond(f"❌ Rename failed: {e}\n\nIf the API failed, your local username was not changed. You can try again or contact support.", parse_mode="html")
+        return
+
+    # Original "expecting_username" flow for purchases / demos
+    if not session.get("expecting_username"):
+        return  # ignore unless we asked for it
 
     # Save as pending until user confirms
     session["pending_username"] = username_clean
@@ -402,6 +642,12 @@ async def confirm_yes_handler(event):
     session.pop("pending_username", None)
     session["username"] = username_clean
     session["expecting_username"] = False
+
+    # Persist username to DB so background reminders and edit flows can find it
+    try:
+        users_col.update_one({"user_id": user_id}, {"$set": {"username": username_clean}}, upsert=True)
+    except Exception:
+        logger.exception("Failed to persist username to DB on confirm.")
 
     # If this was a demo request, proceed with demo activation
     if session.get("demo_request"):
@@ -649,6 +895,14 @@ async def broadcast_handler(event):
 
 def main():
     logger.info("Stake Farmer Payment Bot is running...")
+
+    # schedule the active users checker background task on the event loop
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(check_active_users_loop())
+    except Exception as e:
+        logger.exception(f"Failed to schedule active users checker: {e}")
+
     bot.run_until_disconnected()
 
 if __name__ == "__main__":
