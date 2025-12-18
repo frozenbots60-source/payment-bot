@@ -336,8 +336,8 @@ async def check_active_users_loop():
                                     # already reminded for this expiry
                                     continue
 
-                                # find the Telegram user_id from DB
-                                rec = users_col.find_one({"user_id": user_id})
+                                # find the Telegram user_id from DB using the username from API
+                                rec = users_col.find_one({"username": username_clean})
                                 if not rec:
                                     # try demo collection
                                     rec = demos_col.find_one({"username": username_clean})
