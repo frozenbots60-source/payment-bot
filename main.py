@@ -39,7 +39,7 @@ OXAPAY_API_KEY = "SNJEE3-MOEI0B-ZR0FW4-UWSLXH"
 OXAPAY_API_BASE = "https://api.oxapay.com"
 
 # Activation / support API base
-ACTIVATION_API_URL = "https://chat-auth-75bd02aa400a.herokuapp.com"
+ACTIVATION_API_URL = "https://chat-auth11-bad82326a8c1.herokuapp.com"
 ACTIVE_USERS_ENDPOINT = f"{ACTIVATION_API_URL}/active_users"
 RENAME_USER_ENDPOINT = f"{ACTIVATION_API_URL}/rename_user"
 
