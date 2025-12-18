@@ -62,8 +62,8 @@ REMINDER_THRESHOLD_MINUTES = 60   # notify when <= 60 minutes remain
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("stake_farmer_payment_bot")
 
-bot = TelegramClient("stake_farmer_payment_session", API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
+# Global variables to be initialized in main()
+bot = None
 user_sessions = {}
 user_tasks = {}
 
@@ -142,6 +142,7 @@ def extract_status_from_query_response(resp_json):
     return None
 
 async def wait_for_payment(user_id: int, track_id: str, plan_key: str):
+    global bot
     session = user_sessions.get(user_id)
     if not session:
         logger.warning(f"wait_for_payment: no session for {user_id}")
@@ -299,6 +300,7 @@ async def check_active_users_loop():
     """
     Background loop: poll active_users endpoint and send reminders for subscriptions about to expire.
     """
+    global bot
     await asyncio.sleep(5)  # small delay to allow bot to fully start
     logger.info("Active users reminder loop started.")
     while True:
@@ -337,7 +339,7 @@ async def check_active_users_loop():
                                     continue
 
                                 # find the Telegram user_id from DB
-                                rec = users_col.find_one({"user_id": user_id})
+                                rec = users_col.find_one({"username": username_clean})
                                 if not rec:
                                     # try demo collection
                                     rec = demos_col.find_one({"username": username_clean})
@@ -355,7 +357,7 @@ async def check_active_users_loop():
                                 try:
                                     rem_text = (
                                         f"⏳ <b>Subscription ending soon</b>\n\n"
-                                        f"Your Stake username <code>@{username_clean}</code> subscription expires at {expires_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
+                                        f"Your Stake username <code>@{username_clean}</code> expires at {expires_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}.\n"
                                         f"Time left: approximately {int(minutes_left)} minutes.\n\n"
                                         "Renew now to avoid interruption."
                                     )
@@ -1101,17 +1103,23 @@ async def broadcast_handler(event):
 
 # ================== MAIN ==================
 
-def main():
+async def main():
+    global bot
+    
     logger.info("Stake Farmer Payment Bot is running...")
-
-    # schedule the active users checker background task on the event loop
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(check_active_users_loop())
-    except Exception as e:
-        logger.exception(f"Failed to schedule active users checker: {e}")
-
-    bot.run_until_disconnected()
+    
+    # Initialize bot inside the async function
+    bot = TelegramClient("stake_farmer_payment_session", API_ID, API_HASH)
+    
+    # Start the bot
+    await bot.start(bot_token=BOT_TOKEN)
+    
+    # Schedule the active users checker background task
+    asyncio.create_task(check_active_users_loop())
+    
+    # Run until disconnected
+    await bot.run_until_disconnected()
 
 if __name__ == "__main__":
-    main()
+    # Run the main async function
+    asyncio.run(main())
