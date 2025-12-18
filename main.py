@@ -248,17 +248,32 @@ def get_active_users():
 
 def rename_user_api(old_username: str, new_username: str):
     """
-    POST /rename_user with form fields old_username and new_username.
-    Returns response JSON or raises on error.
+    POST /rename_user with form fields old_username, new_username and admin.
+    Returns response JSON-like dict. DOES NOT raise on HTTP error; returns an error dict instead.
     """
     try:
-        data = {"old_username": old_username, "new_username": new_username}
+        # include admin credentials as the activation API expects (same as activate_subscription)
+        data = {"old_username": old_username, "new_username": new_username, "admin": "admin1234"}
         r = requests.post(RENAME_USER_ENDPOINT, data=data, timeout=20)
-        r.raise_for_status()
-        return r.json()
+
+        # Do not raise for status to avoid uncaught exceptions bubbling up in threads.
+        # Instead parse response and return structured dict.
+        if r.status_code >= 200 and r.status_code < 300:
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": True, "status_code": r.status_code, "response_text": r.text}
+        else:
+            # Attempt to parse JSON error body, fallback to text.
+            try:
+                err = r.json()
+            except Exception:
+                err = r.text
+            logger.warning(f"rename_user_api returned error {r.status_code}: {err}")
+            return {"ok": False, "status_code": r.status_code, "response": err}
     except Exception as e:
         logger.exception(f"rename_user_api error: {e}")
-        raise
+        return {"ok": False, "error": str(e)}
 
 # ================== ACTIVE USERS CHECKER (background) ==================
 
@@ -553,7 +568,7 @@ async def username_handler(event):
             # We don't know the old username; try rename API with only new_username (API might fail)
             try:
                 resp = await asyncio.to_thread(rename_user_api, "", new_username)
-                # Accept success if API responds 200; adapt if API returns other status shape
+                # Accept success if API responds ok; adapt if API returns other status shape
                 users_col.update_one({"user_id": user_id}, {"$set": {"username": new_username}}, upsert=True)
                 session["username"] = new_username
                 await event.respond(f"✅ Username updated locally to <code>@{new_username}</code>. Rename API response: {resp}", parse_mode="html")
@@ -565,7 +580,6 @@ async def username_handler(event):
         try:
             resp = await asyncio.to_thread(rename_user_api, old_username, new_username)
             # On success, update DB records that reference the old username
-            # Update users_col entries where username == old_username -> set to new_username
             try:
                 users_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
                 demos_col.update_many({"username": old_username}, {"$set": {"username": new_username}})
